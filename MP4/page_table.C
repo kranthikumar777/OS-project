@@ -1,0 +1,154 @@
+#include "assert.H"
+#include "exceptions.H"
+#include "console.H"
+#include "paging_low.H"
+#include "page_table.H"
+
+PageTable * PageTable::current_page_table = NULL;
+unsigned int PageTable::paging_enabled = 0;
+ContFramePool * PageTable::kernel_mem_pool = NULL;
+ContFramePool * PageTable::process_mem_pool = NULL;
+unsigned long PageTable::shared_size = 0;
+	//Object to maintain registered pools
+	VMPool * PageTable::no_regions[];
+	unsigned int PageTable::no_pools = 0;
+
+
+void PageTable::init_paging(ContFramePool * _kernel_mem_pool,
+                            ContFramePool * _process_mem_pool,
+                            const unsigned long _shared_size)
+{
+    //assert(false);
+    //Console::puts("Initialized Paging System\n");
+	//assert(false);
+	kernel_mem_pool = _kernel_mem_pool;
+	process_mem_pool = _process_mem_pool;
+	shared_size = _shared_size;
+   Console::puts("Initialized Paging System\n");
+}
+
+PageTable::PageTable()
+{
+    //assert(false);
+	//assert(false);
+	//free memory to store the page directory
+	page_directory = (unsigned long *) ((process_mem_pool->get_frames(1))*PAGE_SIZE);
+	unsigned long * page_table;
+	//frame in which we are storing our page table
+	page_table = (unsigned long *) ((process_mem_pool->get_frames(1))*PAGE_SIZE);
+	unsigned long address = 0;
+	unsigned int i;
+	for (i=0; i<1024; i++) {
+	page_table[i] = address | 3; //attribute set to: supervisor level, read/write, present (011 in binary)
+	address = address + 4096; //4kb	
+	}
+	page_directory[0] = (unsigned long) page_table;
+	page_directory[0] = page_directory[0] | 3; 
+	unsigned int j;
+	for (j=1; j<1024; j++) {
+	page_directory[j] = 0 | 2;   //attribute set to: supervisor level, read/write, not present (010 in binary)
+	}
+	//recursive page table lookup
+	page_directory[1023] = ((unsigned long) page_directory) | 3;
+    Console::puts("Constructed Page Table object\n");
+}
+
+
+void PageTable::load()
+{
+    //assert(false);
+	current_page_table = this;
+	write_cr3( (unsigned long) page_directory );	//keeping page directory address into CR3 register
+    Console::puts("Loaded page table\n");
+}
+
+void PageTable::enable_paging()
+{
+    //assert(false);
+	write_cr0 (read_cr0() | 0x80000000);
+	paging_enabled = 1;
+    Console::puts("Enabled paging\n");
+}
+
+void PageTable::handle_fault(REGS * _r)
+{
+    //assert(false);
+	unsigned long address = read_cr2();
+	Console::puti(address);
+	Console::puts("\n");
+	unsigned int err_code;
+	err_code = _r->err_code;
+	if (err_code & 1) {
+		Console::puts("Protection fault \n");
+		assert (false);
+	}
+	//Checking is legitimate or not
+	
+	unsigned int flag = 0;
+	unsigned int k;
+	for (k=0; k<no_pools; k++) {
+		if (no_regions[k] -> is_legitimate(address) == true) {
+			flag =1;
+			break;
+		}
+	}
+	if (flag = 0) {
+		Console::puts("Error, Address is not legitimate \n");
+		assert(false);
+	}
+	unsigned long * page_virtual_dir;
+	unsigned long * page_table;
+	//unsigned long * page_table_virtual_add;
+	unsigned long * page_frame;
+	
+	//if (err_code & 0xFFFFFFFE) {
+		//page directory fault check
+		page_virtual_dir = (unsigned long *) ((0xFFFFF000) | (address >> 20) & (0xFFFFFFFC));
+		Console::puti(*page_virtual_dir);
+		Console::puts("\n");
+		if ((*page_virtual_dir & 0x1) == 0) {
+			page_table = (unsigned long *) ((process_mem_pool->get_frames(1))*PAGE_SIZE);
+			*page_virtual_dir = ((unsigned long) page_table) | 3;
+		}
+		//We will have a page if this condition meets success
+		//page table fault check
+		
+		unsigned long * page_table_virtual_add = (unsigned long *) ((0xffc00000 | (address >> 10)) &(0xfffffffc) ) ;
+		Console::puti(*page_table_virtual_add);
+		Console::puts("\n");
+		if ((*page_table_virtual_add & 0x1)) {
+			//Console::puti(*page_table_virtual_add);
+			assert (false);
+		} else {
+			page_frame = (unsigned long *) ((process_mem_pool->get_frames(1))*PAGE_SIZE);
+			*page_table_virtual_add = ((unsigned long) page_frame) | ((err_code & 6) ^ 0x00000005);
+		}
+	//}
+    Console::puts("handled page fault\n");
+}
+
+void PageTable::register_pool(VMPool * _vm_pool)
+{
+    //assert(false);
+	if (no_pools >= 512) {
+		Console::puts("Used pools exceeded VM Pool memory\n");
+		assert (false);
+		for (;;);
+	} 
+	no_regions[no_pools] = _vm_pool;
+	no_pools ++;
+	Console::puts("registered VM pool\n");
+}
+
+void PageTable::free_page(unsigned long _page_no) {
+    //assert(false);
+	unsigned long * page_table_virtual_add = (unsigned long *)(0xFFC00000 | (_page_no << 2));
+  	if((*page_table_virtual_add) & 1){
+    		ContFramePool::release_frames((*page_table_virtual_add >> 12));
+    		*page_table_virtual_add = 0 | 2;
+  	}else{
+    		assert(false);
+  	}
+  	write_cr3((unsigned long) page_directory);
+    Console::puts("freed page\n");
+}

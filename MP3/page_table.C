@@ -1,0 +1,105 @@
+#include "assert.H"
+#include "exceptions.H"
+#include "console.H"
+#include "paging_low.H"
+#include "page_table.H"
+
+PageTable * PageTable::current_page_table = NULL;
+unsigned int PageTable::paging_enabled = 0;
+ContFramePool * PageTable::kernel_mem_pool = NULL;
+ContFramePool * PageTable::process_mem_pool = NULL;
+unsigned long PageTable::shared_size = 0;
+
+
+
+void PageTable::init_paging(ContFramePool * _kernel_mem_pool,
+                            ContFramePool * _process_mem_pool,
+                            const unsigned long _shared_size)
+{
+   //assert(false);
+	kernel_mem_pool = _kernel_mem_pool;
+	process_mem_pool = _process_mem_pool;
+	shared_size = _shared_size;
+   Console::puts("Initialized Paging System\n");
+}
+
+PageTable::PageTable()
+{
+   //assert(false);
+	//unsigned long * page_directory;
+	//free memory to store the page directory
+	page_directory = (unsigned long *) ((kernel_mem_pool->get_frames(1))*PAGE_SIZE);
+	unsigned long * page_table;
+	//frame in which we are storing our page table
+	page_table = (unsigned long *) ((kernel_mem_pool->get_frames(1))*PAGE_SIZE);
+	unsigned long address = 0;
+	//unsigned int n_entries;
+	//n_entries = PAGE_SIZE/4;
+	unsigned int i;
+	for (i=0; i<1024; i++) {
+	page_table[i] = address | 3; //attribute set to: supervisor level, read/write, present (011 in binary)
+	address = address + 4096; //4kb	
+	}
+	page_directory[0] = (unsigned long) page_table;
+	page_directory[0] = page_directory[0] | 3; 
+	unsigned int j;
+	for (j=1; j<1024; j++) {
+	page_directory[j] = 0 | 2;   //attribute set to: supervisor level, read/write, not present (010 in binary)
+	}
+   Console::puts("Constructed Page Table object\n");
+}
+
+
+void PageTable::load()
+{
+   //assert(false);
+	current_page_table = this;
+	write_cr3( (unsigned long) page_directory );	//keeping page directory address into CR3 register
+   Console::puts("Loaded page table\n");
+}
+
+void PageTable::enable_paging()
+{
+   //assert(false);
+	write_cr0 (read_cr0() | 0x80000000);
+	paging_enabled = 1;
+   Console::puts("Enabled paging\n");
+}
+
+void PageTable::handle_fault(REGS * _r)
+{
+  //assert(false);
+	unsigned int err_code;
+	err_code = _r->err_code;
+	if (err_code & 1) {
+		Console::puts("Protection fault \n");
+		assert (false);
+	}
+	unsigned long address = read_cr2();
+	unsigned long * page_dir;
+	unsigned long * page_table;
+	unsigned long * page_table_address;
+	page_dir = ((unsigned long *) read_cr3());
+	unsigned long page_dir_index = address>>22;
+	unsigned long  page_entry;
+	unsigned long * page_frame;
+	if (err_code & 0xFFFFFFFE) {
+		//page directory fault check
+		if ((page_dir[page_dir_index] & 1)== 0) {
+			page_table = (unsigned long *) ((kernel_mem_pool->get_frames(1))*PAGE_SIZE);
+			page_dir[page_dir_index] = ((unsigned long) page_table) | 3;
+		}
+		//We will have a page if this condition meets success
+		//page table fault check
+		page_table_address = ((unsigned long *) (page_dir[page_dir_index] & 0xFFFFF000) );
+		page_entry = (address & 0x003FFFFF) >> 12;
+		if (page_table_address[page_entry] & 1) {
+			assert (false);
+		} else {
+			page_frame = (unsigned long *) ((process_mem_pool->get_frames(1))*PAGE_SIZE);
+			page_table_address[page_entry] = ((unsigned long) page_frame) | ((err_code & 6) ^ 0x00000005);
+		}
+	}
+  	Console::puts("handled page fault\n");
+}
+
